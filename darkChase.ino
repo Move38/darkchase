@@ -1,5 +1,5 @@
 /*
-  Dark Circle
+  Dark Chase
   by Move38, Inc. 2019
     Lead development by Dan King
     original game by CHe-Wei, Dan King, Jonathan Bobrow
@@ -17,6 +17,8 @@ enum faceRoadStates {LOOSE, ROAD, SIDEWALK, CRASH};
 byte faceRoadInfo[6];
 
 bool isPlayer = false;
+Timer pressTimer;
+bool correctPress = false;
 
 enum handshakeStates {NOCAR, HAVECAR, READY, CARSENT};
 byte handshakeState[6];
@@ -42,7 +44,6 @@ uint32_t timeCarPassed[6];
 byte carBrightnessOnFace[6];
 
 #define FADE_DURATION       1500
-#define FADE_ROAD_DURATION  500
 #define CRASH_DURATION      2000
 
 uint32_t timeOfShockwave = 0;
@@ -51,9 +52,9 @@ byte currentSpeed = 1;
 
 #define SPEED_INCREMENTS_STANDARD 35
 
-#define MIN_TRANSIT_TIME_STANDARD 666 // HIGHWAY TO HELL
-#define MAX_TRANSIT_TIME_STANDARD 1200
-#define SHOCKWAVE_DURATION 1500
+#define MIN_TRANSIT_TIME_STANDARD 200 // HIGHWAY TO HELL
+#define MAX_TRANSIT_TIME_STANDARD 600
+#define SHOCKWAVE_DURATION 500
 
 word currentTransitTime;
 
@@ -120,14 +121,25 @@ void loop() {
   }
 
   //clear button presses
+  buttonPressed();
   buttonSingleClicked();
+  buttonDoubleClicked();
   buttonMultiClicked();
 }
 
 void playerLoop() {
-  if (buttonPressed()) {
-    shockwaveState = SHOCKWAVE;
-    timeOfShockwave = millis();
+  if (pressTimer.isExpired()) { //have not pressed recently
+    if (buttonPressed()) {//ooh, a press
+      if (haveCar) {
+        correctPress = true;
+      } else {
+        correctPress = false;
+      }
+
+      shockwaveState = SHOCKWAVE;
+      timeOfShockwave = millis();
+      pressTimer.set(SHOCKWAVE_DURATION);
+    }
   }
 }
 
@@ -315,6 +327,8 @@ void spawnCar() {
       }
     }
   }
+
+  shockwaveState = SHOCKWAVE;
 }
 
 void goLoose() {
@@ -425,15 +439,8 @@ void roadLoopCar() {
 }
 
 void crashBlink() {
-  shockwaveState = SHOCKWAVE;
-  timeOfShockwave = millis();
-  isLoose = false;
-  timeOfCrash = millis();
-  crashHere = true;
-  FOREACH_FACE(f) {
-    faceRoadInfo[f] = CRASH;
-  }
-  crashTimer.set(CRASH_TIME);
+  loseCar();
+  spawnCar();
 }
 
 void crashLoop() {
@@ -536,16 +543,18 @@ void graphics() {
       carBrightnessOnFace[f] = maxCarBrightness;
     }
 
+    // Draw our car
+    setColorOnFace(makeColorHSB(0, 0, carBrightnessOnFace[f]), f);
+
     if (carBrightnessOnFace[f] == 0 && isPlayer) {
       setColorOnFace(YELLOW, f);
     }
-
-    // Draw our car
-    setColorOnFace(makeColorHSB(0, 0, carBrightnessOnFace[f]), f);
   }
 
-  if (isPlayer && millis() - timeOfShockwave < SHOCKWAVE_DURATION) {
-    if (haveCar) {
+
+
+  if (isPlayer && !pressTimer.isExpired()) {
+    if (correctPress) {
       setColor(GREEN);
     } else {
       setColor(RED);
@@ -556,19 +565,6 @@ void graphics() {
     standbyGraphics();
   }
 
-
-  if ( millis() - timeOfCrash < CRASH_TIME ) {
-    setColor(RED);
-    // show fiery wreckage
-    FOREACH_FACE(f) {
-      byte shakiness = map(millis() - timeOfCrash, 0, CRASH_TIME, 0, 30);
-      //byte bri = 200 - map(millis() - timeOfCrash, 0, CRASH_TIME, 0, 200) + random(55);
-      //setColorOnFace(makeColorHSB(0, random(55) + 200, bri), f);
-      setColorOnFace(makeColorHSB(30 - shakiness, 255, 255 - (shakiness * 6) - random(55)), f);
-    }
-
-    //    crashGraphics();
-  }
 }
 
 /*
