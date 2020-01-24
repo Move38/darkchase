@@ -16,6 +16,8 @@
 enum faceRoadStates {LOOSE, ROAD, SIDEWALK, CRASH};
 byte faceRoadInfo[6];
 
+bool isPlayer = false;
+
 enum handshakeStates {NOCAR, HAVECAR, READY, CARSENT};
 byte handshakeState[6];
 Timer datagramTimeout;
@@ -47,27 +49,15 @@ uint32_t timeOfShockwave = 0;
 
 byte currentSpeed = 1;
 
-enum CarClass {
-  STANDARD,
-  BOOSTED
-};
-
-byte currentCarClass = STANDARD;
-
 #define SPEED_INCREMENTS_STANDARD 35
-#define SPEED_INCREMENTS_BOOSTED  70
 
 #define MIN_TRANSIT_TIME_STANDARD 666 // HIGHWAY TO HELL
 #define MAX_TRANSIT_TIME_STANDARD 1200
-#define MIN_TRANSIT_TIME_BOOSTED  200
-#define MAX_TRANSIT_TIME_BOOSTED  1000
+#define SHOCKWAVE_DURATION 1500
 
 word currentTransitTime;
 
 Timer transitTimer;
-
-byte carHues[4] = {80, 111, 160, 215}; // TODO: Set these colors purposefully
-byte currentCarHue = 0; // index of the car color
 
 bool crashHere = false;
 uint32_t timeOfCrash = 0;
@@ -97,7 +87,7 @@ void setup() {
 */
 
 void loop() {
-  // on double click we send a message to all connected pieces to propogate an easy setup road
+  // on multi click we send a message to all connected pieces to propogate an easy setup road
   if (buttonMultiClicked()) {
     easySetup();
   }
@@ -111,6 +101,10 @@ void loop() {
     roadLoopCar();
   } else {
     roadLoopNoCar();
+  }
+
+  if (isPlayer) {
+    playerLoop();
   }
 
   //shockwave handling
@@ -128,6 +122,13 @@ void loop() {
   //clear button presses
   buttonSingleClicked();
   buttonMultiClicked();
+}
+
+void playerLoop() {
+  if (buttonPressed()) {
+    shockwaveState = SHOCKWAVE;
+    timeOfShockwave = millis();
+  }
 }
 
 void looseLoop() {
@@ -232,8 +233,6 @@ void roadLoopNoCar() {
                 if (getDatagramLengthOnFace(f) == 3) {//is it the right length?
                   byte *data = (byte *) getDatagramOnFace(f);//grab the data
                   currentSpeed = data[0];
-                  currentCarClass = data[1];
-                  currentCarHue = data[2];
 
                   //THEY HAVE SENT THE CAR. BECOME THE ACTIVE GUY
                   FOREACH_FACE(ff) {
@@ -241,7 +240,7 @@ void roadLoopNoCar() {
                   }
                   haveCar = true;
                   resetIsCarPassed();
-                  currentTransitTime = map(getSpeedIncrements() - currentSpeed, 0, getSpeedIncrements(), getMinTransitTime(), getMaxTransitTime());
+                  currentTransitTime = map(SPEED_INCREMENTS_STANDARD - currentSpeed, 0, SPEED_INCREMENTS_STANDARD, MIN_TRANSIT_TIME_STANDARD, MAX_TRANSIT_TIME_STANDARD);
                   transitTimer.set(currentTransitTime);
 
                   hasDirection = true;
@@ -279,12 +278,16 @@ void roadLoopNoCar() {
 
   //if I'm clicked, I will attempt to spawn the car (only happens if there is a legitimate exit choice)
   if (buttonDoubleClicked()) {
-    spawnCar(STANDARD);
+    spawnCar();
+  }
+
+  if (buttonLongPressed()) {
+    isPlayer = !isPlayer;
   }
 
 }
 
-void spawnCar(byte carClass) {
+void spawnCar() {
   FOREACH_FACE(f) {
     if (!hasDirection) {
       if (faceRoadInfo[f] == ROAD) {//this could be my exit
@@ -302,22 +305,10 @@ void spawnCar(byte carClass) {
             }
             handshakeState[exitFace] = HAVECAR;
 
-            // set the car class
-            currentCarClass = carClass;
-
-            // choose a hue for this car
-            currentCarHue = random(3);
-
             // launch car
             haveCar = true;
             resetIsCarPassed();
-            if (carClass == BOOSTED) {
-              currentSpeed = (buttonClickCount() * 10) - 29;
-              if (currentSpeed > SPEED_INCREMENTS_BOOSTED) {
-                currentSpeed = SPEED_INCREMENTS_BOOSTED;
-              }
-            }
-            currentTransitTime = map(getSpeedIncrements() - currentSpeed, 0, getSpeedIncrements(), getMinTransitTime(), getMaxTransitTime());
+            currentTransitTime = map(SPEED_INCREMENTS_STANDARD - currentSpeed, 0, SPEED_INCREMENTS_STANDARD, MIN_TRANSIT_TIME_STANDARD, MAX_TRANSIT_TIME_STANDARD);
             transitTimer.set(currentTransitTime);
           }
         }
@@ -382,13 +373,11 @@ void roadLoopCar() {
             handshakeState[exitFace] = CARSENT;
 
             byte speedDatagram[3];  // holds speed, car class, car hue
-            if (currentSpeed + 1 <= getSpeedIncrements()) {
+            if (currentSpeed + 1 <= SPEED_INCREMENTS_STANDARD) {
               speedDatagram[0] = currentSpeed + 1;
             } else {
               speedDatagram[0] = currentSpeed;
             }
-            speedDatagram[1] = currentCarClass;
-            speedDatagram[2] = currentCarHue;
             sendDatagramOnFace(&speedDatagram, sizeof(speedDatagram), exitFace);
 
             datagramTimeout.set(DATAGRAM_TIMEOUT_LIMIT);
@@ -525,48 +514,41 @@ byte getShockwaveState(byte neighborData) {
 */
 void graphics() {
   // clear buffer
+
   setColor(OFF);
+
+  byte maxCarBrightness = 0;
+  if (millis() - timeOfShockwave < SHOCKWAVE_DURATION) {//we should be able to see the car
+    maxCarBrightness = map(SHOCKWAVE_DURATION - (millis() - timeOfShockwave), 0, SHOCKWAVE_DURATION, 0, 255);
+  }
 
   FOREACH_FACE(f) {
 
-    // first draw the car fade
-    if (millis() - timeCarPassed[f] > FADE_DURATION) {
-      carBrightnessOnFace[f] = 0;
-
-      // draw the road
-      if (faceRoadInfo[f] == ROAD) {
-        if (millis() - timeCarPassed[f] < FADE_ROAD_DURATION + FADE_DURATION) {
-          byte roadBrightness = (millis() - timeCarPassed[f] - FADE_DURATION) / 2;
-          setColorOnFace(dim(YELLOW, roadBrightness), f);
-        }
-        else {
-          //determine if this is a loose end
-          if (isValueReceivedOnFaceExpired(f) || getRoadState(getLastValueReceivedOnFace(f)) != ROAD) { //no neighbor or non-road neighbor
-            setColorOnFace(RED, f);
-          } else {
-            setColorOnFace(YELLOW, f);
-          }
-        }
-      }
-
+    // in the beginning, quick fade in
+    if (millis() - timeCarPassed[f] > CAR_FADE_IN_DIST ) {
+      carBrightnessOnFace[f] = 255 - map(millis() - timeCarPassed[f] - CAR_FADE_IN_DIST, 0, FADE_DURATION - CAR_FADE_IN_DIST, 0, 255);
     }
     else {
-      // in the beginning, quick fade in
-      if (millis() - timeCarPassed[f] > CAR_FADE_IN_DIST ) {
-        carBrightnessOnFace[f] = 255 - map(millis() - timeCarPassed[f] - CAR_FADE_IN_DIST, 0, FADE_DURATION - CAR_FADE_IN_DIST, 0, 255);
-      }
-      else {
-        carBrightnessOnFace[f] = map(millis() - timeCarPassed[f], 0, CAR_FADE_IN_DIST, 0, 255);
-      }
+      carBrightnessOnFace[f] = map(millis() - timeCarPassed[f], 0, CAR_FADE_IN_DIST, 0, 255);
+    }
 
-      // Draw our car
-      if (currentCarClass == STANDARD) {
-        setColorOnFace(makeColorHSB(carHues[currentCarHue], 255, carBrightnessOnFace[f]), f);
-      }
-      else {
-        setColorOnFace(dim(WHITE, carBrightnessOnFace[f]), f);
-      }
+    if (carBrightnessOnFace[f] > maxCarBrightness) {
+      carBrightnessOnFace[f] = maxCarBrightness;
+    }
 
+    if (carBrightnessOnFace[f] == 0 && isPlayer) {
+      setColorOnFace(YELLOW, f);
+    }
+
+    // Draw our car
+    setColorOnFace(makeColorHSB(0, 0, carBrightnessOnFace[f]), f);
+  }
+
+  if (isPlayer && millis() - timeOfShockwave < SHOCKWAVE_DURATION) {
+    if (haveCar) {
+      setColor(GREEN);
+    } else {
+      setColor(RED);
     }
   }
 
@@ -574,11 +556,6 @@ void graphics() {
     standbyGraphics();
   }
 
-  if (millis() - timeOfShockwave < 500) {
-    Color shockwaveColor = makeColorHSB((millis() - timeOfShockwave) / 12, 255, 255);
-    setColorOnFace(shockwaveColor, entranceFace); // should really be 3x as long, with a delay for the travel of the effect
-    setColorOnFace(shockwaveColor, exitFace);
-  }
 
   if ( millis() - timeOfCrash < CRASH_TIME ) {
     setColor(RED);
@@ -591,37 +568,6 @@ void graphics() {
     }
 
     //    crashGraphics();
-  }
-}
-
-/*
-   SPEED CONVENIENCE FUNCTIONS
-*/
-
-word getSpeedIncrements() {
-  if (currentCarClass == STANDARD) {
-    return SPEED_INCREMENTS_STANDARD;
-  }
-  else {
-    return SPEED_INCREMENTS_BOOSTED;
-  }
-}
-
-word getMinTransitTime() {
-  if (currentCarClass == STANDARD) {
-    return MIN_TRANSIT_TIME_STANDARD;
-  }
-  else {
-    return MIN_TRANSIT_TIME_BOOSTED;
-  }
-}
-
-word getMaxTransitTime() {
-  if (currentCarClass == STANDARD) {
-    return MAX_TRANSIT_TIME_STANDARD;
-  }
-  else {
-    return MAX_TRANSIT_TIME_BOOSTED;
   }
 }
 
